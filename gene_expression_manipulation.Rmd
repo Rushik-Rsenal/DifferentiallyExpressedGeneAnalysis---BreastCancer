@@ -1,0 +1,380 @@
+---
+title: "Differential Gene Expression For Breast Cancer"
+author: "Rushik S"
+date: "2026-02-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+Get the libraries
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+library(dplyr)
+library(GEOquery)
+```
+
+Read data using readr
+```{r}
+library(readr)
+data <- read_csv("GSE183947_fpkm.csv.gz")
+dim(data)
+```
+
+
+
+Get the metadata using GEOquery
+```{r}
+gse <- getGEO(GEO='GSE183947', GSEMatrix=TRUE)
+gse
+
+```
+Get the phenodata andto put in the metadata  variables
+```{r}
+metadata <- pData(phenoData(gse[[1]]))
+head(metadata)
+```
+
+Get our title, 
+Get characteristics_ch1 to determine whether the sample comes from tissue or tumor
+Get characteristics_ch1.1 column for metastasis: yes or metastasis: no
+
+```{r}
+metadata.subset <- select(metadata, c("title", "characteristics_ch1", "characteristics_ch1.1", "description"))
+
+head(metadata.subset)
+```
+Modify the column names for better accessibility using the pipe operator from tidyverse (%>%).
+
+Notice that characteristics_ch1 column has "tissue: breast tumor". Remove "tissue: " part of each row to shorten the values.
+
+Remove "metastasis: " part from each row of characteristics_ch1.1 as well using gsub().
+
+
+```{r}
+metadata.modified <- metadata %>%
+  select("title", "characteristics_ch1", "characteristics_ch1.1", "description") %>%
+  rename(tissue=characteristics_ch1) %>%
+  rename(metastasis=characteristics_ch1.1) %>%
+  mutate(tissue=gsub("tissue: ", "", tissue)) %>%
+  mutate(metastasis=gsub("metastasis: ", "", metastasis))
+metadata.modified
+```
+
+Now join the metadata with our gene expression data
+Problem: Each column in the data corresponds to our sample. However, each row in the metadata.modified corresponds to a sample. So we have a dataset that uses sample numbers as columns and we have another dataset that uses sample numbers as rows.
+
+Solution: We fix this through reshaping our data
+gather converts from wide to long format
+
+This basically means.
+each gene gets its own row for every sample.
+
+Before:
+        Sample 1    Sample 2    Sample 3
+Gene A      10        4           2
+Gene B      10        5           2
+Gene C      10        6           1
+
+After gather():
+Sample 1 Gene A 10
+Sample 1 Gene B 10
+Sample 1 Gene C 10
+Sample 2 Gene A 4
+Sample 2 Gene B 5
+Sample 2 Gene C 6
+Sample 3 Gene A 2
+Sample 3 Gene B 2
+Sample 3 Gene C 1
+
+```{r}
+names(data)[1] = "X"
+data.long <- data %>%
+  rename(gene=X) %>%
+  gather(key='samples', value='FPKM', -gene)
+
+# head(data.long)
+tail(data.long)
+```
+
+Now let's join data.long with metadata.modified.
+So we are performing a left join on data.long and metadata.modified on the the sample number.
+We have "samples" in data and "description" in the metadata.
+
+What is a left join?
+We grab rows that are in both data.long and metadata.modified and we also grab rows that are exclusively in data.long
+```{r}
+data.long <- data.long %>%
+  left_join(., metadata.modified, by = c("samples"="description"))
+# head(data.long)
+tail(data.long)
+```
+
+Basic exploration of data using aggregate functions
+
+```{r}
+data.long %>% 
+  filter(gene == "BRCA1" | gene == "BRCA2") %>%
+  group_by(gene,  tissue) %>%
+  summarise(mean_FPKM = mean(FPKM))
+```
+## Exploring the expression of MLIP, HMCN2, LRRN4CL, DUOX2
+```{r}
+data.long %>% 
+  filter(gene == "GALNTL5" | gene == "MLIP" | gene == "HMCN2" | gene == "LRRN4CL" | gene == "DUOX2") %>%
+  group_by(gene,  tissue) %>%
+  summarise(mean_FPKM = mean(FPKM))
+```
+
+
+
+It can be seen that there is higher expression of BRCA1 in the tumor and lower expression of BRCA2 in the tumor.
+
+## Ploting Gene expression data
+Basic Format
+ggplot(data, aes(x=variable1, y=variable2))  + 
+  geom_bar()
+
+### Charting a barplot
+```{r}
+library(ggplot2)
+barplot <- data.long %>%
+  filter(gene == "BRCA1") %>%
+  head(60) %>%
+  ggplot(., aes(x = samples, y = FPKM, fill=tissue)) +
+  geom_col()
+
+ggsave("BRCA1 gene expression.png", barplot)
+```
+
+### Density
+```{r}
+density_plot <- data.long %>%
+  filter(gene == "BRCA1") %>%
+  ggplot(., aes(x = FPKM, fill = tissue)) +
+  geom_density()
+ggsave("density_plot.png", density_plot)
+```
+
+### Box Plot
+```{r}
+box_plot <- data.long %>%
+  filter(gene == "BRCA1") %>%
+  filter(tissue == "breast tumor") %>%
+  ggplot(., aes(x = metastasis, y = FPKM)) +
+  geom_boxplot()
+ggsave("metastasis.png", box_plot)
+```
+
+```{r}
+violin_plot <- data.long %>%
+  filter(gene == "BRCA2") %>%
+  filter(tissue == "breast tumor") %>%
+  ggplot(., aes(x = metastasis, y = FPKM)) +
+  geom_violin()
+ggsave('metastatsis vs BRCA2 expresion.png', violin_plot)
+```
+
+### Scatter Plot for BRCA1 and BRCA2 expression in Tumor
+```{r}
+scatter_plot <- data.long %>%
+  filter(gene == "BRCA1" | gene == "BRCA2") %>%
+  filter(tissue == "breast tumor") %>%
+  spread(key = gene, value = FPKM) %>%
+  ggplot(., aes(x = BRCA1, y = BRCA2)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE)
+ggsave("BRCA1 vs BRCA2 expression for tumors.png", scatter_plot)
+scatter_plot
+```
+
+### Scatter Plot for BRCA1 and BRCA2 expression in Healthy Tissue
+```{r}
+scatter_plot_2 <- data.long %>%
+  filter(gene == "BRCA1" | gene == "BRCA2") %>%
+  filter(tissue != "breast tumor") %>%
+  spread(key = gene, value = FPKM) %>%
+  ggplot(., aes(x = BRCA1, y = BRCA2)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+ggsave("BRCA1 vs BRCA2 expression for healthy tissue.png", scatter_plot_2)
+scatter_plot_2
+```
+
+### Side by Side Comparision of BRCA1 vs BRCA2 expression in Healthy and Tumors
+
+```{r}
+scatter_plot_3 <- data.long %>%
+  filter(gene == "BRCA1" | gene == "BRCA2") %>%
+  spread(key = gene, value = FPKM) %>%
+  ggplot(., aes(x = BRCA1, y = BRCA2, color = tissue)) + 
+  geom_point() + 
+  geom_smooth(method = "lm", se = FALSE)
+ggsave("BRCA1 vs BRCA2 expression for both sample types.png", scatter_plot_3)
+scatter_plot_3
+```
+
+### Heatmap
+```{r}
+# genes_of_interest <- c(data %>%
+#   select(X) %>%
+#   slice(1:50))
+# genes_of_interest
+
+genes_of_interest <- c("BRCA1", "BRCA2", "TP53", "ALK", "MYCN",  "TSPAN6","TNMD",  "DPM1",  "SCYL3", "C1orf112", "FGR",
+ "CFH","FUCA2", "GCLC", "NFYA", "STPG1", "NIPAL3",
+"LAS1L","ENPP4","SEMA3F", "CFTR", "ANKIB1","CYP51A1",
+ "KRIT1","RAD52", "BAD", "LAP3", "CD99",  "HS3ST1",  
+ "AOC1",  "WNT16", "HECW1", "MAD1L1","LASP1", "SNX11",
+ "TMEM176A", "M6PR",  "KLHL13","CYP26B1", "ICA1",  "DBNDD1",
+ "ALS2",  "CASP10","CFLAR", "TFPI",  "NDUFAF7", "RBM5",
+ "MTMR7", "SLC7A2","ARF5",  "SARM1", "POLDIP2", "PLXND1",  
+ "AK2", "CD38")
+
+genes_of_progression <- c("GALNTL5", "MLIP", "HMCN2", "LRRN4CL", "DUOX2")
+plot_data_log <- log2(data.long$FPKM + 1)
+
+heatmap <- data.long %>%
+  filter(gene %in% genes_of_progression) %>%
+  filter(log2(FPKM + 1) != 0) %>%
+  arrange(tissue) %>%
+  ggplot(., aes(x = samples, y = gene, fill = log2(FPKM + 1), color = tissue)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red")
+
+ggsave("heatmap.png", heatmap)
+heatmap
+
+```
+```{r}
+heatmap2 <- data.long %>%
+  arrange(., metastasis) %>%
+  filter(gene %in% genes_of_progression) %>%
+  ggplot(., aes(x = samples, y = gene, fill = log2(FPKM + 1))) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "blue")
+heatmap2
+```
+
+## Identify Differentially expressed genes using DESeq
+```{r}
+library(DESeq2)
+```
+
+### Prepare data
+```{r}
+# In our metadata, we have each row corresponding to a Sample number
+# We get the description the column to access all sample numbers in metadata
+colData <- metadata.modified$description
+
+# In our data, we have each row corresponding to a gene and each column corresponds to a sample 
+# We get the column names  to access all sample numbers in data
+countsData <- data
+countsData <- colnames(countsData[2:61])
+
+# Check if sample numbers from both tables are matching
+all(countsData %in% colData)
+
+# Check if the sample numbers from both tables are in the same order
+all(countsData == colData)
+
+# We are good to go if both return TRUE
+```
+
+```{r}
+library(limma)
+
+# 1. Log-transform your data if it isn't already
+# (Assuming 'data' is your normalized matrix)
+newData <- data[1:61]
+rownames(newData) <- data$X
+
+
+log_counts <- log2(newData[2:61] + 1)
+newData
+log_counts
+
+# 2. Create your design matrix
+newMetadata = metadata.modified
+rownames(newMetadata) = newMetadata$description
+design <- model.matrix(~ tissue, data = newMetadata)
+
+# 3. Fit the model
+rownames(log_counts) <- data$X
+fit <- lmFit(log_counts, design)
+fit <- eBayes(fit, trend = TRUE) # Crucial: trend=TRUE for normalized data
+
+# 4. Get results
+results <- topTable(fit, coef = 2)
+results
+```
+```{r}
+# Get the top 50 genes by adjusted p-value
+top_genes_table <- topTable(fit, coef = 2, number = 30)
+
+# Get the names/IDs of these genes
+top_gene_ids <- rownames(top_genes_table)
+top_gene_ids
+```
+
+```{r}
+# Subset your original log-transformed matrix to just these 50 genes
+# Assuming 'log_counts' was your input to lmFit
+plot_data <- log_counts[top_gene_ids, ]
+library(pheatmap)
+
+# 1. Setup column annotations (Metadata)
+# Make sure the rownames of annotation_col match the colnames of plot_data
+annotation_col <- newMetadata %>% 
+  select(tissue, metastasis) 
+
+# 2. Plot
+top30heatmap <- pheatmap(plot_data, 
+  annotation_col = annotation_col,
+  scale = "row", # Centers each gene's expression at zero
+  clustering_distance_rows = "correlation",
+  clustering_distance_cols = "euclidean",
+  show_colnames = FALSE,     # Clean up the bottom axis
+  main = "Limma Top 30: Gene Expression Profile",
+  color = colorRampPalette(c("navy", "white", "firebrick3"))(100)
+)
+ggsave("Top 30 Differentially Expressed Genes.png", top30heatmap)
+```
+
+### Exploring gene expression data with other genes of interest
+```{r}
+data.long %>% 
+  filter(gene == "DEFB130" | gene == "UGT2A1" | gene == "KLK9" | gene == "CCDC177" | gene == "LCN6") %>%
+  group_by(gene,  tissue) %>%
+  summarise(mean_FPKM = mean(FPKM))
+```
+
+
+
